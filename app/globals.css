@@ -1,4 +1,4 @@
-// FILE LOCATION: app/globals.css
+/* // FILE LOCATION: app/globals.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -24,7 +24,10 @@
 html,
 body {
   height: 100%;
+  width: 100%;
   overflow: hidden;
+  margin: 0;
+  padding: 0;
 }
 
 .font-display {
