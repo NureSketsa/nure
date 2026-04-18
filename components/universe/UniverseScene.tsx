@@ -1,45 +1,123 @@
 // FILE LOCATION: components/universe/UniverseScene.tsx
+// The persistent Three.js canvas. Never unmounts.
+// Reads activePanel from universeStore to know when to zoom in/out.
+// Planets are clickable -> sets activePanel -> feature panel fades in on top.
 
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useEffect, useRef, useCallback } from 'react'
 import * as THREE from 'three'
 import { getDailyTagline } from '@/lib/taglines'
+import { useUniverseStore, PanelId } from '@/lib/universeStore'
 
-const PLANETS = [
-    { id: 'habits', label: 'HABITS', prefix: 'Ha', planet: '⭐', suffix: 'its', angle: 0, radius: 220, color: '#f5a623', route: '/habits' },
-    { id: 'todos', label: 'TODOS', prefix: 'To', planet: '🪐', suffix: 'ist', angle: 72, radius: 320, color: '#00d4aa', route: '/todos' },
-    { id: 'calendar', label: 'CALENDAR', prefix: 'Ca', planet: '🌙', suffix: 'ndar', angle: 144, radius: 260, color: '#8888ff', route: '/calendar' },
-    { id: 'journal', label: 'JOURNAL', prefix: 'Jo', planet: '🌫️', suffix: 'rnal', angle: 216, radius: 350, color: '#7b2d8b', route: '/journal' },
-    { id: 'links', label: 'LINKS', prefix: 'Li', planet: '🔵', suffix: 'ks', angle: 288, radius: 290, color: '#4444ff', route: '/links' },
+export const PLANETS = [
+    { id: 'habits' as PanelId, label: 'HABITS', angle: 0, radius: 230, color: '#f5c842', route: '/habits' },
+    { id: 'todos' as PanelId, label: 'TODOS', angle: 72, radius: 320, color: '#00d4aa', route: '/todos' },
+    { id: 'calendar' as PanelId, label: 'CALENDAR', angle: 144, radius: 265, color: '#7799ff', route: '/calendar' },
+    { id: 'journal' as PanelId, label: 'JOURNAL', angle: 216, radius: 350, color: '#cc66ff', route: '/journal' },
+    { id: 'links' as PanelId, label: 'LINKS', angle: 288, radius: 295, color: '#4488ff', route: '/links' },
 ]
 
-type ZoomState = 'idle' | 'zooming' | 'title' | 'fading'
+function buildCosmicObject(id: string, color: string): THREE.Group {
+    const group = new THREE.Group()
+
+    if (id === 'habits') {
+        group.add(new THREE.Mesh(new THREE.SphereGeometry(22, 32, 32), new THREE.MeshBasicMaterial({ color: '#fff8d0' })))
+        group.add(Object.assign(new THREE.Mesh(new THREE.SphereGeometry(30, 32, 32), new THREE.MeshBasicMaterial({ color: '#f5c842', transparent: true, opacity: 0.15, side: THREE.BackSide }))))
+        group.add(Object.assign(new THREE.Mesh(new THREE.SphereGeometry(42, 32, 32), new THREE.MeshBasicMaterial({ color: '#f5a623', transparent: true, opacity: 0.06, side: THREE.BackSide }))))
+        for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * Math.PI * 2
+            const len = i % 2 === 0 ? 55 : 35
+            const spike = new THREE.Mesh(new THREE.ConeGeometry(2, len, 6), new THREE.MeshBasicMaterial({ color: '#ffe066', transparent: true, opacity: 0.75 }))
+            spike.position.set(Math.cos(angle) * (22 + len / 2), Math.sin(angle) * (22 + len / 2), 0)
+            spike.rotation.z = angle + Math.PI / 2
+            group.add(spike)
+        }
+    } else if (id === 'todos') {
+        group.add(new THREE.Mesh(new THREE.SphereGeometry(24, 32, 32), new THREE.MeshBasicMaterial({ color: '#00b894' })))
+        const r1 = new THREE.Mesh(new THREE.RingGeometry(34, 54, 64), new THREE.MeshBasicMaterial({ color: '#00d4aa', side: THREE.DoubleSide, transparent: true, opacity: 0.65 }))
+        r1.rotation.x = Math.PI * 0.35
+        group.add(r1)
+        const r2 = new THREE.Mesh(new THREE.RingGeometry(56, 64, 64), new THREE.MeshBasicMaterial({ color: '#00ffc8', side: THREE.DoubleSide, transparent: true, opacity: 0.3 }))
+        r2.rotation.x = Math.PI * 0.35
+        group.add(r2)
+    } else if (id === 'calendar') {
+        group.add(new THREE.Mesh(new THREE.SphereGeometry(26, 32, 32), new THREE.MeshBasicMaterial({ color: '#aabbff' })))
+        const mask = new THREE.Mesh(new THREE.SphereGeometry(23, 32, 32), new THREE.MeshBasicMaterial({ color: '#05050f' }))
+        mask.position.set(18, 0, 5)
+        group.add(mask)
+        group.add(new THREE.Mesh(new THREE.SphereGeometry(32, 32, 32), new THREE.MeshBasicMaterial({ color: '#7799ff', transparent: true, opacity: 0.08, side: THREE.BackSide })))
+    } else if (id === 'journal') {
+        ;[{ r: 42, c: '#9933cc', o: 0.1 }, { r: 30, c: '#cc66ff', o: 0.17 }, { r: 20, c: '#dd88ff', o: 0.25 }, { r: 12, c: '#ffffff', o: 0.35 }].forEach(l => {
+            const m = new THREE.Mesh(new THREE.SphereGeometry(l.r, 24, 24), new THREE.MeshBasicMaterial({ color: l.c, transparent: true, opacity: l.o, side: THREE.DoubleSide }))
+            m.position.set((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, 0)
+            group.add(m)
+        })
+        const wGeo = new THREE.BufferGeometry()
+        const wp = new Float32Array(60 * 3)
+        for (let i = 0; i < 60 * 3; i++) wp[i] = (Math.random() - 0.5) * 80
+        wGeo.setAttribute('position', new THREE.BufferAttribute(wp, 3))
+        group.add(new THREE.Points(wGeo, new THREE.PointsMaterial({ color: 0xdd88ff, size: 1.5, transparent: true, opacity: 0.55 })))
+    } else if (id === 'links') {
+        group.add(new THREE.Mesh(new THREE.SphereGeometry(12, 32, 32), new THREE.MeshBasicMaterial({ color: '#88aaff' })))
+        group.add(new THREE.Mesh(new THREE.SphereGeometry(18, 32, 32), new THREE.MeshBasicMaterial({ color: '#4488ff', transparent: true, opacity: 0.14, side: THREE.BackSide })))
+            ;[{ r: 28, s: 5 }, { r: 28, s: 4 }, { r: 28, s: 3 }, { r: 42, s: 4 }, { r: 42, s: 3 }, { r: 42, s: 5 }, { r: 42, s: 3 }, { r: 56, s: 3 }, { r: 56, s: 4 }, { r: 56, s: 2 }].forEach((d, i) => {
+                const ang = (i / 10) * Math.PI * 2
+                const star = new THREE.Mesh(new THREE.SphereGeometry(d.s, 8, 8), new THREE.MeshBasicMaterial({ color: i % 3 === 0 ? '#ffffff' : i % 3 === 1 ? '#aaccff' : '#4488ff' }))
+                star.position.set(Math.cos(ang) * d.r, Math.sin(ang) * d.r * 0.5, Math.sin(ang * 0.7) * 10)
+                group.add(star)
+            })
+    }
+
+    return group
+}
 
 export default function UniverseScene() {
     const mountRef = useRef<HTMLDivElement>(null)
     const hoveredRef = useRef<string | null>(null)
-    const router = useRouter()
-    const routerRef = useRef(router)
+    const { activePanel, setActivePanel, setIsZooming } = useUniverseStore()
 
-    const [zoomState, setZoomState] = useState<ZoomState>('idle')
-    const [targetPlanet, setTargetPlanet] = useState<typeof PLANETS[0] | null>(null)
-    const [titleOpacity, setTitleOpacity] = useState(0)
+    // Refs to share Three.js state with the zoom-out trigger
+    const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
+    const homePosRef = useRef(new THREE.Vector3(0, 0, 600))
+    const planetDataRef = useRef<{ group: THREE.Group; id: string }[]>([])
+    const isZoomingRef = useRef(false)
+    const activePanelRef = useRef<PanelId>(null)
 
-    useEffect(() => { routerRef.current = router }, [router])
-
-    // After zoom completes → show title for 5s → navigate
+    // Keep activePanelRef in sync
     useEffect(() => {
-        if (zoomState !== 'title' || !targetPlanet) return
-        const fadeIn = setTimeout(() => setTitleOpacity(1), 50)
-        const navigate = setTimeout(() => {
-            setZoomState('fading')
-            setTitleOpacity(0)
-            setTimeout(() => routerRef.current.push(targetPlanet.route), 800)
-        }, 5000)
-        return () => { clearTimeout(fadeIn); clearTimeout(navigate) }
-    }, [zoomState, targetPlanet])
+        activePanelRef.current = activePanel
+
+        // If panel was closed (set to null) → zoom back out
+        if (activePanel === null && cameraRef.current && !isZoomingRef.current) {
+            zoomOut()
+        }
+    }, [activePanel])
+
+    const zoomOut = useCallback(() => {
+        const camera = cameraRef.current
+        if (!camera) return
+        isZoomingRef.current = true
+        setIsZooming(true)
+
+        const startPos = camera.position.clone()
+        const startTime = performance.now()
+        const duration = 1200
+
+        const loop = () => {
+            const t = Math.min((performance.now() - startTime) / duration, 1)
+            const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+            camera.position.lerpVectors(startPos, homePosRef.current, ease)
+            camera.lookAt(0, 0, 0)
+            if (t < 1) {
+                requestAnimationFrame(loop)
+            } else {
+                isZoomingRef.current = false
+                setIsZooming(false)
+            }
+        }
+        requestAnimationFrame(loop)
+    }, [setIsZooming])
 
     useEffect(() => {
         if (!mountRef.current) return
@@ -50,6 +128,7 @@ export default function UniverseScene() {
         const scene = new THREE.Scene()
         const camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 2000)
         camera.position.set(0, 0, 600)
+        cameraRef.current = camera
 
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
         renderer.setSize(w, h)
@@ -59,47 +138,47 @@ export default function UniverseScene() {
 
         // Stars
         const starGeo = new THREE.BufferGeometry()
-        const starCount = 3000
-        const pos = new Float32Array(starCount * 3)
-        for (let i = 0; i < starCount * 3; i++) pos[i] = (Math.random() - 0.5) * 3000
-        starGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-        const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 1, transparent: true, opacity: 0.7 }))
+        const sp = new Float32Array(3000 * 3)
+        for (let i = 0; i < 3000 * 3; i++) sp[i] = (Math.random() - 0.5) * 3000
+        starGeo.setAttribute('position', new THREE.BufferAttribute(sp, 3))
+        const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 1, transparent: true, opacity: 0.6 }))
         scene.add(stars)
 
         // Black hole
         const bhGroup = new THREE.Group()
         scene.add(bhGroup)
         bhGroup.add(new THREE.Mesh(new THREE.CircleGeometry(48, 64), new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide })))
-            ;[
-                { inner: 50, outer: 70, color: 0xf5a623, op: 0.8 },
-                { inner: 72, outer: 88, color: 0xff8800, op: 0.65 },
-                { inner: 90, outer: 100, color: 0xffaa33, op: 0.5 },
-                { inner: 102, outer: 108, color: 0xcc5500, op: 0.35 },
-            ].forEach(r => {
-                const ring = new THREE.Mesh(new THREE.RingGeometry(r.inner, r.outer, 64), new THREE.MeshBasicMaterial({ color: r.color, side: THREE.DoubleSide, transparent: true, opacity: r.op }))
+            ;[{ i: 50, o: 72, c: 0xf5a623, op: 0.85 }, { i: 74, o: 90, c: 0xff8800, op: 0.65 }, { i: 92, o: 104, c: 0xffaa33, op: 0.45 }, { i: 106, o: 114, c: 0xcc5500, op: 0.28 }].forEach(r => {
+                const ring = new THREE.Mesh(new THREE.RingGeometry(r.i, r.o, 64), new THREE.MeshBasicMaterial({ color: r.c, side: THREE.DoubleSide, transparent: true, opacity: r.op }))
                 ring.rotation.x = Math.PI * 0.15
                 bhGroup.add(ring)
             })
 
         // Planets
-        const planetMeshes: THREE.Mesh[] = []
-        const planetData = PLANETS.map((p) => {
-            const mesh = new THREE.Mesh(new THREE.SphereGeometry(18, 32, 32), new THREE.MeshBasicMaterial({ color: new THREE.Color(p.color) }))
-            mesh.userData = { id: p.id }
+        const hitSpheres: THREE.Mesh[] = []
+        const planetData = PLANETS.map(p => {
+            const group = buildCosmicObject(p.id as string, p.color)
             const rad = (p.angle * Math.PI) / 180
-            mesh.position.set(Math.cos(rad) * p.radius, Math.sin(rad) * p.radius * 0.4, Math.sin(rad) * p.radius * 0.1)
-            scene.add(mesh)
-            planetMeshes.push(mesh)
-            return { mesh, ...p }
-        })
+            group.position.set(Math.cos(rad) * p.radius, Math.sin(rad) * p.radius * 0.4, Math.sin(rad) * p.radius * 0.1)
+            scene.add(group)
 
-        // DOM labels
+            const hit = new THREE.Mesh(new THREE.SphereGeometry(65, 8, 8), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }))
+            hit.position.copy(group.position)
+            hit.userData = { id: p.id }
+            scene.add(hit)
+            hitSpheres.push(hit)
+
+            return { group, hit, ...p }
+        })
+        planetDataRef.current = planetData.map(p => ({ group: p.group, id: p.id as string }))
+
+        // Labels
         const labelContainer = document.createElement('div')
         labelContainer.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden;'
         mount.appendChild(labelContainer)
-        const labelEls = planetData.map((p) => {
+        const labelEls = planetData.map(p => {
             const el = document.createElement('div')
-            el.style.cssText = `position:absolute;transform:translate(-50%,-50%);font-family:var(--font-display);font-size:9px;letter-spacing:0.3em;text-transform:uppercase;color:${p.color};opacity:0.7;pointer-events:none;white-space:nowrap;text-shadow:0 0 10px ${p.color};`
+            el.style.cssText = `position:absolute;transform:translate(-50%,-50%);font-family:var(--font-display);font-size:9px;letter-spacing:0.3em;text-transform:uppercase;color:${p.color};opacity:0.7;pointer-events:none;white-space:nowrap;text-shadow:0 0 12px ${p.color};transition:opacity 0.2s;`
             el.textContent = p.label
             labelContainer.appendChild(el)
             return el
@@ -108,46 +187,51 @@ export default function UniverseScene() {
         // Raycaster
         const raycaster = new THREE.Raycaster()
         const mouse = new THREE.Vector2()
-        let isZooming = false
 
         const onMouseMove = (e: MouseEvent) => {
-            if (isZooming) return
+            if (isZoomingRef.current || activePanelRef.current) return
             mouse.x = (e.clientX / w) * 2 - 1
             mouse.y = -(e.clientY / h) * 2 + 1
             raycaster.setFromCamera(mouse, camera)
-            const hits = raycaster.intersectObjects(planetMeshes)
+            const hits = raycaster.intersectObjects(hitSpheres)
             hoveredRef.current = hits.length > 0 ? hits[0].object.userData.id : null
             mount.style.cursor = hits.length > 0 ? 'pointer' : 'default'
         }
 
         const onClick = (e: MouseEvent) => {
-            if (isZooming) return
+            if (isZoomingRef.current || activePanelRef.current) return
             mouse.x = (e.clientX / w) * 2 - 1
             mouse.y = -(e.clientY / h) * 2 + 1
             raycaster.setFromCamera(mouse, camera)
-            const hits = raycaster.intersectObjects(planetMeshes)
+            const hits = raycaster.intersectObjects(hitSpheres)
             if (!hits.length) return
 
             const clickedId = hits[0].object.userData.id
             const planet = PLANETS.find(p => p.id === clickedId)!
-            const targetMesh = planetData.find(p => p.id === clickedId)!.mesh
+            const targetGroup = planetData.find(p => p.id === clickedId)!.group
 
-            isZooming = true
-            setTargetPlanet(planet)
-            setZoomState('zooming')
+            isZoomingRef.current = true
+            setIsZooming(true)
 
             const startPos = camera.position.clone()
-            const targetPos = new THREE.Vector3(targetMesh.position.x * 0.85, targetMesh.position.y * 0.85, targetMesh.position.z + 40)
+            const tp = targetGroup.position
+            const targetPos = new THREE.Vector3(tp.x * 0.8, tp.y * 0.8, tp.z + 60)
             const startTime = performance.now()
-            const duration = 1400
+            const duration = 1200
 
             const zoomLoop = () => {
                 const t = Math.min((performance.now() - startTime) / duration, 1)
                 const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
                 camera.position.lerpVectors(startPos, targetPos, ease)
-                camera.lookAt(targetMesh.position)
-                if (t < 1) requestAnimationFrame(zoomLoop)
-                else setZoomState('title')
+                camera.lookAt(tp)
+                if (t < 1) {
+                    requestAnimationFrame(zoomLoop)
+                } else {
+                    isZoomingRef.current = false
+                    setIsZooming(false)
+                    // Open the panel AFTER zoom completes
+                    setActivePanel(planet.id)
+                }
             }
             requestAnimationFrame(zoomLoop)
         }
@@ -163,27 +247,35 @@ export default function UniverseScene() {
         const animate = () => {
             frame = requestAnimationFrame(animate)
             time += 0.005
-            stars.rotation.y = time * 0.02
-            stars.rotation.x = time * 0.005
-            bhGroup.rotation.z = time * 0.3
 
-            if (!isZooming) {
-                camera.position.x += (Math.sin(time * 0.1) * 20 - camera.position.x) * 0.02
-                camera.position.y += (Math.cos(time * 0.08) * 10 - camera.position.y) * 0.02
+            stars.rotation.y = time * 0.015
+            bhGroup.rotation.z = time * 0.28
+
+            // Only drift camera when idle
+            if (!isZoomingRef.current && !activePanelRef.current) {
+                camera.position.x += (Math.sin(time * 0.1) * 18 - camera.position.x) * 0.015
+                camera.position.y += (Math.cos(time * 0.08) * 9 - camera.position.y) * 0.015
                 camera.lookAt(0, 0, 0)
             }
 
-            planetMeshes.forEach((mesh, i) => {
-                const hovered = hoveredRef.current === mesh.userData.id
-                mesh.scale.setScalar(hovered ? 1.3 + Math.sin(time * 4) * 0.05 : 1 + Math.sin(time * 1.5 + i) * 0.05)
-                mesh.rotation.y = time * (0.5 + i * 0.1)
-            })
-
             planetData.forEach((p, i) => {
-                tempV.copy(p.mesh.position).project(camera)
-                labelEls[i].style.left = ((tempV.x * 0.5 + 0.5) * w) + 'px'
-                labelEls[i].style.top = ((-tempV.y * 0.5 + 0.5) * h + 30) + 'px'
-                labelEls[i].style.opacity = hoveredRef.current === p.id ? '1' : '0.6'
+                const hovered = hoveredRef.current === p.id
+                p.group.scale.setScalar(hovered ? 1.2 + Math.sin(time * 4) * 0.04 : 1 + Math.sin(time * 1.2 + i * 0.8) * 0.04)
+                if (p.id === 'habits') p.group.rotation.z = time * 0.15
+                else if (p.id === 'todos') p.group.rotation.y = time * 0.4
+                else if (p.id === 'calendar') p.group.rotation.y = time * 0.2
+                else if (p.id === 'journal') { p.group.rotation.y = time * 0.1; p.group.rotation.z = time * 0.05 }
+                else if (p.id === 'links') { p.group.rotation.y = time * 0.5; p.group.rotation.z = time * 0.15 }
+
+                // Hide labels when a panel is open
+                if (activePanelRef.current) {
+                    labelEls[i].style.opacity = '0'
+                } else {
+                    tempV.copy(p.group.position).project(camera)
+                    labelEls[i].style.left = ((tempV.x * 0.5 + 0.5) * w) + 'px'
+                    labelEls[i].style.top = ((-tempV.y * 0.5 + 0.5) * h + 65) + 'px'
+                    labelEls[i].style.opacity = hovered ? '1' : '0.6'
+                }
             })
 
             renderer.render(scene, camera)
@@ -209,92 +301,27 @@ export default function UniverseScene() {
         }
     }, [])
 
-    const isIdle = zoomState === 'idle'
+    const isIdle = !activePanel
 
     return (
         <div style={{ position: 'fixed', inset: 0, background: '#05050f' }}>
-            {/* Three.js canvas */}
             <div ref={mountRef} style={{ position: 'absolute', inset: 0 }} />
 
-            {/* NURE title — top center */}
+            {/* NURE title — only shown when idle */}
             {isIdle && (
-                <div style={{
-                    position: 'absolute', top: 0, left: 0, right: 0,
-                    display: 'flex', flexDirection: 'column', alignItems: 'center',
-                    paddingTop: '48px', pointerEvents: 'none', zIndex: 10,
-                }}>
-                    <h1 style={{
-                        fontFamily: 'var(--font-display)', fontSize: '48px', fontWeight: 900,
-                        letterSpacing: '0.4em', color: '#f5a623', margin: 0,
-                        textShadow: '0 0 40px rgba(245,166,35,0.5), 0 0 100px rgba(245,166,35,0.2)',
-                    }}>
-                        NURE
-                    </h1>
-                    <p style={{
-                        marginTop: '12px', fontSize: '11px', letterSpacing: '0.5em',
-                        textTransform: 'uppercase', color: '#8888aa', fontFamily: 'var(--font-body)',
-                    }}>
-                        {getDailyTagline()}
-                    </p>
+                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: '48px', pointerEvents: 'none', zIndex: 10 }}>
+                    <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '48px', fontWeight: 900, letterSpacing: '0.4em', color: '#f5a623', margin: 0, textShadow: '0 0 40px rgba(245,166,35,0.5)' }}>NURE</h1>
+                    <p style={{ marginTop: '12px', fontSize: '11px', letterSpacing: '0.5em', textTransform: 'uppercase', color: '#8888aa', fontFamily: 'var(--font-body)' }}>{getDailyTagline()}</p>
                 </div>
             )}
-
-            {/* Date — bottom left */}
             {isIdle && (
-                <div style={{
-                    position: 'absolute', bottom: '32px', left: '32px',
-                    fontSize: '11px', letterSpacing: '0.2em', textTransform: 'uppercase',
-                    color: '#8888aa', fontFamily: 'var(--font-display)', opacity: 0.5,
-                    pointerEvents: 'none', zIndex: 10,
-                }}>
+                <div style={{ position: 'absolute', bottom: '32px', left: '32px', fontSize: '11px', letterSpacing: '0.2em', textTransform: 'uppercase', color: '#8888aa', fontFamily: 'var(--font-display)', opacity: 0.5, pointerEvents: 'none', zIndex: 10 }}>
                     {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
                 </div>
             )}
-
-            {/* Hint — bottom right */}
             {isIdle && (
-                <div style={{
-                    position: 'absolute', bottom: '32px', right: '32px',
-                    fontSize: '11px', letterSpacing: '0.2em',
-                    color: '#8888aa', fontFamily: 'var(--font-body)', opacity: 0.4,
-                    pointerEvents: 'none', zIndex: 10,
-                }}>
+                <div style={{ position: 'absolute', bottom: '32px', right: '32px', fontSize: '11px', letterSpacing: '0.2em', color: '#8888aa', fontFamily: 'var(--font-body)', opacity: 0.4, pointerEvents: 'none', zIndex: 10 }}>
                     click a planet to enter
-                </div>
-            )}
-
-            {/* Planet title screen — To🪐ist style */}
-            {(zoomState === 'title' || zoomState === 'fading') && targetPlanet && (
-                <div style={{
-                    position: 'absolute', inset: 0, zIndex: 20,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    background: 'rgba(5,5,15,0.8)',
-                    opacity: titleOpacity,
-                    transition: 'opacity 0.8s ease',
-                    pointerEvents: 'none',
-                }}>
-                    <div style={{
-                        display: 'flex', alignItems: 'center',
-                        fontFamily: 'var(--font-display)', fontWeight: 900,
-                        fontSize: 'clamp(60px, 10vw, 110px)',
-                        color: targetPlanet.color,
-                        textShadow: `0 0 60px ${targetPlanet.color}88`,
-                        lineHeight: 1,
-                        userSelect: 'none',
-                    }}>
-                        <span>{targetPlanet.prefix}</span>
-                        <span style={{
-                            fontSize: 'clamp(72px, 12vw, 130px)',
-                            lineHeight: 0.85,
-                            margin: '0 2px',
-                            filter: `drop-shadow(0 0 30px ${targetPlanet.color})`,
-                            position: 'relative',
-                            zIndex: 2,
-                        }}>
-                            {targetPlanet.planet}
-                        </span>
-                        <span>{targetPlanet.suffix}</span>
-                    </div>
                 </div>
             )}
         </div>
